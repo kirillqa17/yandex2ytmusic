@@ -18,26 +18,38 @@ class YoutubeImoirter:
         self.ytmusic = YTMusic(token)
 
     def import_liked_tracks(self, tracks: List[Track]) -> Tuple[List[Track], List[Track]]:
-        not_found = []
-        errors = []
+        not_found: List[Track] = []
+        errors: List[Track] = []
+
         with tqdm(total=len(tracks), position=0, desc='Import tracks') as pbar:
             with tqdm(total=0, bar_format='{desc}', position=1) as trank_log:
                 for track in tracks:
-                    results = self.ytmusic.search(f'{track.artist} {track.name}')
-                    if len(results) == 0:
-                        not_found.append(track)
+                    query = f'{track.artist} {track.name}'
+
+                    try:
+                        results = self.ytmusic.search(query, filter='songs')
+                    except Exception as e:
+                        errors.append(track)
+                        pbar.write(f'Search error: {query}, {e}')
+                        pbar.update(1)
                         continue
-                    
+
+                    if not results:
+                        not_found.append(track)
+                        pbar.update(1)
+                        continue
+
                     result = self._get_best_result(results, track)
                     try:
                         self.ytmusic.rate_song(result['videoId'], 'LIKE')
                     except Exception as e:
                         errors.append(track)
                         pbar.write(f'Error: {track.artist} - {track.name}, {e}')
+
                     pbar.update(1)
                     trank_log.set_description_str(f'{track.artist} - {track.name}')
 
-                return not_found, errors
+        return not_found, errors
     
     def _get_best_result(self, results: List[dict], track: Track) -> dict:
         songs = []
