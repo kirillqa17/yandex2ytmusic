@@ -1,21 +1,32 @@
 import os
+import json
 
 from tqdm import tqdm
 from ytmusicapi import YTMusic, setup_oauth
+from ytmusicapi.auth.oauth import OAuthCredentials
 from typing import List, Tuple
 from .track import Track
 
 
 class YoutubeImoirter:
-    def __init__(self, token_path: str):
+    def __init__(self, token_path: str, client_secrets_path: str = None):
+        if not client_secrets_path or not os.path.exists(client_secrets_path):
+            raise FileNotFoundError(
+                "Client secrets file required. "
+                "Use --client-secrets to provide path to Google OAuth credentials JSON."
+            )
+
+        with open(client_secrets_path, 'r') as f:
+            secrets = json.load(f)['installed']
+
+        oauth_credentials = OAuthCredentials(secrets['client_id'], secrets['client_secret'])
+
         if not os.path.exists(token_path):
-            token = setup_oauth().as_json()
+            token = setup_oauth(secrets['client_id'], secrets['client_secret']).as_json()
             with open(token_path, 'w') as f:
                 f.write(token)
-        else:
-            token = open(token_path, 'r').read()
 
-        self.ytmusic = YTMusic(token)
+        self.ytmusic = YTMusic(token_path, oauth_credentials=oauth_credentials)
 
     def import_liked_tracks(self, tracks: List[Track]) -> Tuple[List[Track], List[Track]]:
         not_found: List[Track] = []

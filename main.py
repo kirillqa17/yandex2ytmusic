@@ -16,8 +16,12 @@ def parse_args() -> argparse.Namespace:
         '--output', type=str, default='tracks.json', help='Output json file'
     )
     parser.add_argument(
-        '--youtube', type=str, default='youtube.json', 
+        '--youtube', type=str, default='youtube.json',
         help='Youtube Music credentials file. If file not exists, it will be created.'
+    )
+    parser.add_argument(
+        '--client-secrets', type=str,
+        help='Path to Google OAuth client secrets JSON file (required for first-time setup)'
     )
     return parser.parse_args()
 
@@ -67,7 +71,7 @@ def move_tracks(
 def main() -> None:
     args = parse_args()
     importer = YandexMusicExporter(args.yandex)
-    exporter = YoutubeImoirter(args.youtube)
+    exporter = YoutubeImoirter(args.youtube, args.client_secrets)
     move_tracks(importer, exporter, args.output)
 
 
