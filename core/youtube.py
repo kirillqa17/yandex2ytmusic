@@ -1,78 +1,191 @@
 import os
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 from ytmusicapi import YTMusic, setup_oauth
-from ytmusicapi.auth.oauth import OAuthCredentials
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from .track import Track
 
 
-class YoutubeImoirter:
+class YoutubeImporter:
     def __init__(self, token_path: str, client_secrets_path: str = None):
-        if not client_secrets_path or not os.path.exists(client_secrets_path):
-            raise FileNotFoundError(
-                "Client secrets file required. "
-                "Use --client-secrets to provide path to Google OAuth credentials JSON."
-            )
+        """
+        Initialize YouTube Music importer.
+
+        Args:
+            token_path: Path to credentials file (OAuth JSON or browser headers JSON)
+            client_secrets_path: Path to Google OAuth client secrets (optional, for OAuth auth)
+        """
+        self.token_path = token_path
+        self.client_secrets_path = client_secrets_path
+
+        if os.path.exists(token_path):
+            with open(token_path, 'r') as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON in {token_path}")
+
+            if 'cookie' in data or 'Cookie' in data or 'x-origin' in data:
+                self.auth_type = 'browser'
+                self.ytmusic = YTMusic(token_path)
+            else:
+                self.auth_type = 'oauth'
+                if not client_secrets_path or not os.path.exists(client_secrets_path):
+                    raise FileNotFoundError(
+                        "OAuth token found but client secrets file required. "
+                        "Use --client-secrets or switch to browser authentication."
+                    )
+                self._init_oauth(token_path, client_secrets_path)
+        else:
+            if client_secrets_path and os.path.exists(client_secrets_path):
+                self.auth_type = 'oauth'
+                self._init_oauth(token_path, client_secrets_path)
+            else:
+                raise FileNotFoundError(
+                    f"Credentials file not found: {token_path}\n"
+                    "Either:\n"
+                    "  1. Create browser auth: ytmusicapi browser --file browser.json\n"
+                    "  2. Use OAuth with --client-secrets option"
+                )
+
+    def _init_oauth(self, token_path: str, client_secrets_path: str):
+        """Initialize OAuth authentication."""
+        from ytmusicapi.auth.oauth import OAuthCredentials
 
         with open(client_secrets_path, 'r') as f:
             secrets = json.load(f)['installed']
 
-        oauth_credentials = OAuthCredentials(secrets['client_id'], secrets['client_secret'])
+        self.oauth_credentials = OAuthCredentials(secrets['client_id'], secrets['client_secret'])
 
         if not os.path.exists(token_path):
             token = setup_oauth(secrets['client_id'], secrets['client_secret']).as_json()
             with open(token_path, 'w') as f:
                 f.write(token)
 
-        self.ytmusic = YTMusic(token_path, oauth_credentials=oauth_credentials)
+        self.ytmusic = YTMusic(token_path, oauth_credentials=self.oauth_credentials)
 
-    def import_liked_tracks(self, tracks: List[Track]) -> Tuple[List[Track], List[Track]]:
+    def _search_track(self, track: Track, idx: int) -> Tuple[int, Track, Optional[str], Optional[str]]:
+        """
+        Search for a track on YouTube Music.
+        Returns (index, track, videoId or None, error or None).
+        """
+        query = f'{track.artist} {track.name}'
+
+        try:
+            results = self.ytmusic.search(query, filter='songs')
+        except Exception as e:
+            return (idx, track, None, str(e))
+
+        if not results:
+            return (idx, track, None, 'not_found')
+
+        result = self._get_best_result(results, track)
+        return (idx, track, result.get('videoId'), None)
+
+    def _like_track(self, track: Track, video_id: str) -> Tuple[Track, bool, Optional[str]]:
+        """Like a single track. Returns (track, success, error)."""
+        try:
+            self.ytmusic.rate_song(video_id, 'LIKE')
+            return (track, True, None)
+        except Exception as e:
+            return (track, False, str(e))
+
+    def import_liked_tracks(self, tracks: List[Track], max_workers: int = 5, keep_order: bool = True) -> Tuple[List[Track], List[Track]]:
+        """
+        Import tracks to YouTube Music.
+
+        Args:
+            tracks: List of tracks to import
+            max_workers: Number of parallel workers (default 5)
+            keep_order: If True, likes are added sequentially to preserve order (slower).
+                       If False, likes are added in parallel (faster, random order).
+        """
         not_found: List[Track] = []
         errors: List[Track] = []
 
-        with tqdm(total=len(tracks), position=0, desc='Import tracks') as pbar:
-            with tqdm(total=0, bar_format='{desc}', position=1) as trank_log:
-                for track in tracks:
-                    query = f'{track.artist} {track.name}'
+        # Этап 1: Параллельный поиск
+        search_results = {}  # idx -> (track, videoId, error)
 
+        print("Поиск треков...")
+        with tqdm(total=len(tracks), desc='Search') as pbar:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(self._search_track, track, idx): idx
+                          for idx, track in enumerate(tracks)}
+
+                for future in as_completed(futures):
                     try:
-                        results = self.ytmusic.search(query, filter='songs')
+                        idx, track, video_id, error = future.result()
+                        search_results[idx] = (track, video_id, error)
+                        pbar.set_postfix_str(f'{track.artist} - {track.name}'[:40])
                     except Exception as e:
-                        errors.append(track)
-                        pbar.write(f'Search error: {query}, {e}')
-                        pbar.update(1)
-                        continue
-
-                    if not results:
-                        not_found.append(track)
-                        pbar.update(1)
-                        continue
-
-                    result = self._get_best_result(results, track)
-                    try:
-                        self.ytmusic.rate_song(result['videoId'], 'LIKE')
-                    except Exception as e:
-                        errors.append(track)
-                        pbar.write(f'Error: {track.artist} - {track.name}, {e}')
-
+                        idx = futures[future]
+                        search_results[idx] = (tracks[idx], None, str(e))
                     pbar.update(1)
-                    trank_log.set_description_str(f'{track.artist} - {track.name}')
+
+        # Собираем треки для лайков
+        tracks_to_like = []  # (idx, track, video_id)
+        for idx in range(len(tracks)):
+            track, video_id, error = search_results[idx]
+
+            if error == 'not_found' or not video_id:
+                not_found.append(track)
+            elif error:
+                errors.append(track)
+            else:
+                tracks_to_like.append((idx, track, video_id))
+
+        # Этап 2: Добавление лайков
+        print("Добавление лайков...")
+
+        if keep_order:
+            # Последовательное добавление для сохранения порядка
+            with tqdm(total=len(tracks_to_like), desc='Like') as pbar:
+                for idx, track, video_id in tracks_to_like:
+                    try:
+                        self.ytmusic.rate_song(video_id, 'LIKE')
+                        pbar.set_postfix_str(f'{track.artist} - {track.name}'[:40])
+                    except Exception as e:
+                        errors.append(track)
+                        pbar.write(f'Like error: {track.artist} - {track.name}: {e}')
+                    pbar.update(1)
+        else:
+            # Параллельное добавление (быстрее, но порядок случайный)
+            with tqdm(total=len(tracks_to_like), desc='Like') as pbar:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(self._like_track, track, video_id): track
+                              for idx, track, video_id in tracks_to_like}
+
+                    for future in as_completed(futures):
+                        track = futures[future]
+                        try:
+                            _, success, error = future.result()
+                            if not success:
+                                errors.append(track)
+                                pbar.write(f'Like error: {track.artist} - {track.name}: {error}')
+                            pbar.set_postfix_str(f'{track.artist} - {track.name}'[:40])
+                        except Exception as e:
+                            errors.append(track)
+                            pbar.write(f'Like error: {track.artist} - {track.name}: {e}')
+                        pbar.update(1)
 
         return not_found, errors
-    
+
     def _get_best_result(self, results: List[dict], track: Track) -> dict:
         songs = []
         for result in results:
             if 'videoId' not in result.keys():
                 continue
-            if result['category'] == 'Top result':
+            if result.get('category') == 'Top result':
                 return result
-            if result['title'] == track.name:
+            if result.get('title') == track.name:
                 return result
             songs.append(result)
         if len(songs) == 0:
             return results[0]
         return songs[0]
-        
+
+
+# Алиас для обратной совместимости
+YoutubeImoirter = YoutubeImporter

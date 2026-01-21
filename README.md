@@ -1,82 +1,186 @@
 # yandex2ytmusic
 
-**[English](README_EN.md)**
-
 Перенос понравившихся треков из Yandex.Музыка в YouTube Music.
 
-## Интерфейс программы
+**Форк [gosha20777/yandex2ytmusic](https://github.com/gosha20777/yandex2ytmusic) с улучшениями.**
+
+## Что нового в этой версии
+
+| Фича | Оригинал | Эта версия |
+|------|----------|------------|
+| Интерактивное меню | Нет (только CLI флаги) | Да |
+| Раздельный экспорт/импорт | Нет | Да |
+| Автоматическая авторизация YouTube | Нет | Да (через Playwright) |
+| Browser authentication | Нет | Да |
+| Многопоточность | Нет | Да (до 5x быстрее) |
+| Выбор режима импорта | Нет | Быстрый / С сохранением порядка |
+| Сохранение прогресса между этапами | Нет | Да |
+
+### Ключевые улучшения
+
+- **Интерактивное меню** — не нужно запоминать флаги командной строки
+- **Раздельный экспорт/импорт** — можно сначала экспортировать треки из Яндекса, а потом отдельно импортировать в YouTube (решает проблему таймаута сессии при большом количестве треков)
+- **Автоматическая авторизация** — программа открывает браузер и сама перехватывает нужные данные для авторизации
+- **Многопоточность** — параллельная обработка треков ускоряет экспорт и импорт до 5 раз
+- **Выбор режима импорта** — быстрый параллельный режим или режим с сохранением порядка треков
+- **Browser authentication** — работает стабильнее чем OAuth, не требует создания проекта в Google Cloud
+
+## Установка
 
 ```bash
-python main.py --help
-usage: main.py [-h] [--yandex YANDEX] [--output OUTPUT] [--youtube YOUTUBE] [--client-secrets CLIENT_SECRETS]
-
-Transfer tracks from Yandex.Music to YouTube Music
-
-options:
-  -h, --help            show this help message and exit
-  --yandex YANDEX       Yandex Music token
-  --output OUTPUT       Output json file
-  --youtube YOUTUBE     Youtube Music credentials file. If file not exists, it will be created.
-  --client-secrets CLIENT_SECRETS
-                        Path to Google OAuth client secrets JSON file (required for first-time setup)
+git clone https://github.com/kirillqa17/yandex2ytmusic.git
+cd yandex2ytmusic
+pip install -r requirements.txt
+playwright install chromium
 ```
 
 ## Использование
 
-### 1. Получить Yandex Music токен
-
-[Получить Yandex Music token](https://yandex-music.readthedocs.io/en/main/token.html). Легче всего это сделать с помошью приложения.
-
-### 2. Получить Google OAuth credentials
-
-1. Перейти в [Google Cloud Console](https://console.cloud.google.com/)
-2. Создать новый проект или выбрать существующий
-3. Перейти в **APIs & Services** → **Library**
-4. Найти **YouTube Data API v3** и нажать **Enable**
-5. Перейти в **APIs & Services** → **OAuth consent screen**
-   - Выбрать **External** и создать
-   - Заполнить обязательные поля (название приложения, email)
-   - В разделе **Test users** добавить email вашего Google аккаунта
-6. Перейти в **APIs & Services** → **Credentials**
-7. Нажать **Create Credentials** → **OAuth client ID**
-8. Выбрать тип приложения: **TVs and Limited Input devices**
-9. Скачать JSON файл с credentials
-
-### 3. Запустить программу
-
 ```bash
-pip install -r requirements.txt
-python main.py --yandex <Yandex Music token> --client-secrets <path to Google OAuth JSON>
+python main.py
 ```
 
-### 4. Авторизация в YouTube Music
+Появится интерактивное меню:
 
-При запуске программы перейти по предложенной ссылке, ввести код из терминала и разрешить доступ к аккаунту.
-4. Дождаться завершения работы программы. Программа также экспортирует музыку Json в файл:
+```
+=== Yandex Music → YouTube Music ===
+
+Что хочешь сделать?
+  1. Полный перенос (экспорт из Яндекса + импорт в YouTube)
+  2. Только экспорт из Яндекс Музыки
+  3. Только импорт в YouTube Music (из файла)
+  4. Настроить авторизацию YouTube Music
+
+Выбор (1-4):
+```
+
+При импорте можно выбрать режим:
+
+```
+Режим импорта:
+  1. Быстрый (параллельный, порядок не сохраняется)
+  2. С сохранением порядка (медленнее)
+```
+
+## Подробная инструкция
+
+### Шаг 1: Получить токен Yandex Music
+
+1. Перейди на [oauth.yandex.ru/authorize](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)
+2. Войди в аккаунт Яндекс
+3. Скопируй токен из URL (параметр `access_token`)
+
+Или используй [инструкцию из документации yandex-music](https://yandex-music.readthedocs.io/en/main/token.html).
+
+### Шаг 2: Экспорт треков из Яндекс Музыки
+
+```bash
+python main.py
+# Выбери: 2. Только экспорт из Яндекс Музыки
+# Введи токен
+```
+
+Треки сохранятся в файл `tracks.json`. Многопоточная обработка ускоряет процесс в ~5 раз.
+
+### Шаг 3: Настроить авторизацию YouTube Music
+
+```bash
+python main.py
+# Выбери: 4. Настроить авторизацию YouTube Music
+```
+
+#### Вариант 1: Автоматически через браузер (рекомендуется)
+
+1. Выбери вариант "1. Автоматически из браузера"
+2. Откроется браузер — войди в аккаунт Google если нужно
+3. Дождись загрузки YouTube Music
+4. Браузер закроется автоматически после перехвата данных
+
+Программа автоматически перехватит нужные headers и создаст файл `browser.json`.
+
+#### Вариант 2: Вручную (если автоматический не работает)
+
+1. Открой [music.youtube.com](https://music.youtube.com) (войди в аккаунт)
+2. Открой DevTools (F12)
+3. Перейди на вкладку **Network** (Сеть)
+4. В фильтре введи `browse`
+5. Кликни на любую страницу в YouTube Music
+6. Найди POST запрос к `browse?...` и кликни на него
+7. Скопируй Request Headers:
+   - **Firefox**: правый клик → Copy Value → Copy Request Headers
+   - **Chrome**: правый клик → Copy → Copy request headers
+8. Вставь в терминал и нажми **Ctrl+D**
+
+### Шаг 4: Импорт треков в YouTube Music
+
+```bash
+python main.py
+# Выбери: 3. Только импорт в YouTube Music (из файла)
+# Выбери режим: 1 (быстрый) или 2 (с сохранением порядка)
+```
+
+Программа загрузит треки из `tracks.json` и добавит их в лайки YouTube Music.
+
+## Режимы импорта
+
+| Режим | Скорость | Порядок треков |
+|-------|----------|----------------|
+| Быстрый | ~5x быстрее | Случайный |
+| С сохранением порядка | Обычная | Как в Яндекс Музыке |
+
+В обоих режимах **поиск треков** выполняется параллельно (быстро). Разница только в добавлении лайков.
+
+## Рекомендуемый порядок для большой библиотеки
+
+Если у тебя много треков (500+), рекомендуется разделить процесс:
+
+1. **Экспорт** (вариант 2) — занимает время, но не зависит от YouTube
+2. **Настройка авторизации** (вариант 4) — делай непосредственно перед импортом
+3. **Импорт** (вариант 3) — делай сразу после настройки авторизации
+
+Это решает проблему таймаута сессии YouTube при долгом экспорте из Яндекса.
+
+## Структура файла tracks.json
 
 ```json
 {
-    // понравившиеся треки в Yandex Music
-    "liked_tracks":[
-        {
-            "artist": "Исполнитнль",
-            "name": "Название трека"
-        }
-    ],
-    // треки, которые не были найдены при переносе
-    "not_found":[], 
-    // треки, при переносе которых произошла ошибка
-    "errors":[]
+  "liked_tracks": [
+    {
+      "artist": "Queen",
+      "name": "Bohemian Rhapsody"
+    }
+  ],
+  "not_found": [],
+  "errors": []
 }
 ```
 
-## Используемые ресурсы
+- `liked_tracks` — все треки из Яндекс Музыки
+- `not_found` — треки, которые не найдены в YouTube Music
+- `errors` — треки, при импорте которых произошла ошибка
 
-- yandex-music - не официальное python API Yandex.Music
-- ytmusicapi - не официальное python API YouTube Music
+## Решение проблем
 
-### P.s.
+### Ошибка 401 Unauthorized
 
-Написал этот скрипт, так как не нашел ничего подобного в сети.
-Буду рад pull реквестам и звездочкам :-)
+Сессия YouTube истекла. Повтори шаг 3 (настройка авторизации).
 
+### Ошибка 400 Bad Request с OAuth
+
+Используй Browser authentication вместо OAuth. Он работает стабильнее.
+
+### Автоматическая авторизация не работает
+
+- Убедись, что установлен Playwright: `pip install playwright && playwright install chromium`
+- Попробуй ручной способ (вариант 2)
+
+## Зависимости
+
+- [yandex-music](https://github.com/MarshalX/yandex-music-api) — API Яндекс Музыки
+- [ytmusicapi](https://github.com/sigma67/ytmusicapi) — API YouTube Music
+- [playwright](https://playwright.dev/python/) — автоматизация браузера для авторизации
+- [tqdm](https://github.com/tqdm/tqdm) — прогресс-бар
+
+## Лицензия
+
+MIT
